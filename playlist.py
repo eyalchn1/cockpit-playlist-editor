@@ -15,6 +15,10 @@ SONG_FILE_FILTER = "Song files (" + " ".join(
 ) + ");;All files (*)"
 
 
+def is_supported_song(path):
+    return Path(path).suffix.casefold() in SONG_EXTENSIONS
+
+
 def song_name_key(path):
     return tuple((1, int(part)) if part.isdigit() else (0, part)
                  for part in re.split(r"(\d+)", path.name.casefold())), path.name
@@ -52,7 +56,10 @@ class Playlist:
     def save(self, filename):
         """Serialize all data, then atomically replace the destination file."""
         destination = Path(filename).resolve()
-        content = encode_json(self.data) + "\n"
+        saved_data = self.data
+        if self.source is None and not self.data.get("name"):
+            saved_data = dict(self.data, name=destination.stem)
+        content = encode_json(saved_data) + "\n"
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n",
@@ -65,25 +72,48 @@ class Playlist:
         finally:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
+        self.data = saved_data
         self.source = destination
 
     @property
     def name(self):
-        return str(self.data.get("name") or (self.source.stem if self.source else "Untitled"))
+        return str(self.data.get("name") or (self.source.stem if self.source else "Untitled Playlist"))
 
-    def import_folders(self, folders, index):
-        """Read direct children only; stage the entire import before changing entries."""
+    def import_paths(self, paths, index, *, include_subfolders=False):
         if not 0 <= index <= len(self.data["entries"]):
             raise ValueError("Invalid insertion index")
         staged = Playlist({"entries": []}, None)
-        for folder in folders:
-            folder = Path(folder).resolve()
-            songs = sorted((path for path in folder.iterdir()
-                            if path.is_file() and path.suffix.casefold() in SONG_EXTENSIONS),
+        for path in paths:
+            path = Path(path).resolve()
+            boundary = len(staged.data["entries"])
+            if path.is_dir():
+                staged.import_folders([path], boundary, include_subfolders=include_subfolders)
+            elif path.is_file() and is_supported_song(path):
+                staged.insert_entry(boundary, song_path=str(path))
+        self.data["entries"][index:index] = staged.data["entries"]
+
+    def import_folders(self, folders, index, *, include_subfolders=False):
+        """Stage the import, optionally traversing each tree in depth-first order."""
+        if not 0 <= index <= len(self.data["entries"]):
+            raise ValueError("Invalid insertion index")
+        staged = Playlist({"entries": []}, None)
+        pending = [(Path(folder).resolve(), frozenset()) for folder in reversed(list(folders))]
+        while pending:
+            folder, ancestors = pending.pop()
+            resolved = folder.resolve()
+            # Directory links/junctions can point back into the current tree.
+            if resolved in ancestors:
+                continue
+            children = list(folder.iterdir())
+            songs = sorted((path for path in children
+                            if path.is_file() and is_supported_song(path)),
                            key=song_name_key)
             staged.insert_entry(len(staged.data["entries"]), category_name=folder.name)
             for song in songs:
                 staged.insert_entry(len(staged.data["entries"]), song_path=str(song))
+            if include_subfolders:
+                subfolders = sorted((path for path in children if path.is_dir()), key=song_name_key)
+                pending.extend((path, ancestors | {resolved}) for path in reversed(subfolders))
         self.data["entries"][index:index] = staged.data["entries"]
 
     def display_entries(self):

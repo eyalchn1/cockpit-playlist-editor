@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 from PySide6.QtCore import Qt, QSettings
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QMessageBox, QMenu, QInputDialog
 from playlist import Playlist, SONG_FILE_FILTER
 from view import MapArea
@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self.area = MapArea()
         self.area.map.moveRequested.connect(self.move_songs)
         self.area.map.foldersDropped.connect(self.import_folders)
+        self.area.map.pathsDropped.connect(self.import_paths)
         self.area.map.contextRequested.connect(self.show_context_menu)
         box.addWidget(self.area, 1)
         self.setCentralWidget(root)
@@ -63,6 +64,10 @@ class MainWindow(QMainWindow):
         for item in (self.save_action, self.save_as_action):
             item.setEnabled(False)
             file_menu.addAction(item)
+        file_menu.addSeparator()
+        self.clear_action = QAction("Clear", self)
+        self.clear_action.triggered.connect(self.clear_playlist)
+        file_menu.addAction(self.clear_action)
         view_menu = self.menuBar().addMenu("View")
         font_menu = view_menu.addMenu("Font Size")
         for title, shortcuts, callback in (
@@ -83,6 +88,18 @@ class MainWindow(QMainWindow):
             item.triggered.connect(callback)
             view_menu.addAction(item)
             self.width_actions.append(item)
+        options_menu = self.menuBar().addMenu("Options")
+        folder_menu = options_menu.addMenu("Folder Import")
+        self.folder_import_group = QActionGroup(self)
+        self.folder_import_group.setExclusive(True)
+        self.first_level_action = folder_menu.addAction("First Level Only")
+        self.include_subfolders_action = folder_menu.addAction("Include Subfolders")
+        for item in (self.first_level_action, self.include_subfolders_action):
+            item.setCheckable(True)
+            self.folder_import_group.addAction(item)
+        include = self.settings.value("import/includeSubfolders", False, type=bool)
+        (self.include_subfolders_action if include else self.first_level_action).setChecked(True)
+        self.folder_import_group.triggered.connect(self.save_folder_import_setting)
         help_menu = self.menuBar().addMenu("Help")
         self.help_dialogs = {}
         for title in ("Help / User Guide", "Keyboard Shortcuts", "About Cockpit Playlist Editor"):
@@ -95,6 +112,10 @@ class MainWindow(QMainWindow):
         self.area.map.column_width_override = max(120, min(1200, stored_width)) if stored_width else None
         self.area.set_column_direction(self.settings.value("view/rightToLeft", False, type=bool))
         self.update_direction_labels()
+
+    def save_folder_import_setting(self, action):
+        self.settings.setValue("import/includeSubfolders", self.include_subfolders_action.isChecked())
+        self.settings.sync()
 
     def update_direction_labels(self):
         rtl = self.area.map.right_to_left
@@ -165,6 +186,7 @@ class MainWindow(QMainWindow):
             return False
         self.overwrite_approved.add(destination)
         self.remember_playlist_directory(destination)
+        self.name_label.setText(self.document.name)
         self.statusBar().showMessage(f"{destination} · נשמר")
         return True
 
@@ -205,7 +227,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Add Song", lambda: self.add_song(index))
         menu.addAction("Add Category", lambda: self.add_category(index))
         menu.addSeparator()
-        entries = self.document.data["entries"]
+        entries = self.document.data["entries"] if self.document else []
         if index < len(entries) and entries[index].get("is_category", False):
             menu.addAction("Remove Category", lambda: self.remove_category(index))
         else:
@@ -226,8 +248,6 @@ class MainWindow(QMainWindow):
         menu.setStyleSheet(f"QMenu {{ padding: 4px; }} QMenu::item {{ padding: 6px {shortcut_width + 28}px 6px 16px; }}")
 
     def show_context_menu(self, index, position):
-        if self.document is None:
-            return
         menu = self.build_context_menu(index)
         try:
             menu.exec(position)
@@ -235,6 +255,9 @@ class MainWindow(QMainWindow):
             menu.deleteLater()
 
     def refresh_after_edit(self):
+        self.name_label.setText(self.document.name)
+        self.save_action.setEnabled(True)
+        self.save_as_action.setEnabled(True)
         self.area.map.reset_selection()
         self.area.map.entries = self.document.display_entries()
         self.area.reflow()
@@ -242,11 +265,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{self.document.source or self.document.name} · שינויים בזיכרון בלבד")
 
     def add_song(self, index):
-        directory = str(self.document.source.parent) if self.document.source else self.settings.value(
+        directory = str(self.document.source.parent) if self.document and self.document.source else self.settings.value(
             "files/playlistDirectory", "", type=str)
         filename, _ = QFileDialog.getOpenFileName(self, "Add Song", directory, SONG_FILE_FILTER)
         if not filename:
             return
+        if self.document is None:
+            self.document = Playlist({"entries": []}, None)
         self.document.insert_entry(index, song_path=str(Path(filename).resolve()))
         self.refresh_after_edit()
 
@@ -254,12 +279,21 @@ class MainWindow(QMainWindow):
         name, accepted = QInputDialog.getText(self, "Add Category", "שם הקטגוריה:")
         if not accepted or not name.strip():
             return
+        if self.document is None:
+            self.document = Playlist({"entries": []}, None)
         self.document.insert_entry(index, category_name=name)
         self.refresh_after_edit()
 
     def remove_songs(self, indices):
         self.document.remove_entries(indices)
         self.refresh_after_edit()
+
+    def clear_playlist(self):
+        if self.document is None:
+            return
+        self.document.data["entries"].clear()
+        self.refresh_after_edit()
+        self.area.scroll_to_start()
 
     def remove_category(self, index):
         name = self.document.data["entries"][index].get("title", "")
@@ -283,7 +317,8 @@ class MainWindow(QMainWindow):
     def import_folders(self, folders, boundary):
         document = self.document if self.document is not None else Playlist({"entries": []}, None)
         try:
-            document.import_folders(folders, boundary)
+            document.import_folders(folders, boundary,
+                                    include_subfolders=self.include_subfolders_action.isChecked())
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, "Folder import failed", str(error))
             return
@@ -291,6 +326,19 @@ class MainWindow(QMainWindow):
         self.name_label.setText(document.name)
         self.save_action.setEnabled(True)
         self.save_as_action.setEnabled(True)
+        self.refresh_after_edit()
+
+    def import_paths(self, paths, boundary):
+        document = self.document if self.document is not None else Playlist({"entries": []}, None)
+        try:
+            document.import_paths(paths, boundary,
+                                  include_subfolders=self.include_subfolders_action.isChecked())
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Import failed", str(error))
+            return
+        if self.document is None and not document.data["entries"]:
+            return
+        self.document = document
         self.refresh_after_edit()
 
 

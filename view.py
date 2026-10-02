@@ -3,11 +3,13 @@ from PySide6.QtGui import QColor, QPainter, QFont, QPen, QDrag, QCursor
 from PySide6.QtWidgets import QWidget, QScrollArea, QToolTip, QApplication
 from layout import calculate_layout
 from pathlib import Path
+from playlist import is_supported_song
 
 
 class PlaylistMap(QWidget):
     moveRequested = Signal(object, int)
     foldersDropped = Signal(object, int)
+    pathsDropped = Signal(object, int)
     contextRequested = Signal(int, object)
     drag_format = "application/x-cockpit-playlist-songs"
 
@@ -145,7 +147,7 @@ class PlaylistMap(QWidget):
         return (event.source() is self and self.drag_indices is not None
                 and event.mimeData().hasFormat(self.drag_format))
 
-    def dropped_folders(self, event):
+    def dropped_paths(self, event):
         mime = event.mimeData()
         if mime.hasFormat(self.drag_format) or not mime.hasUrls():
             return []
@@ -153,13 +155,13 @@ class PlaylistMap(QWidget):
         if not urls or any(not url.isLocalFile() for url in urls):
             return []
         paths = [Path(url.toLocalFile()) for url in urls]
-        return paths if all(path.is_dir() for path in paths) else []
+        return [path for path in paths if path.is_dir() or (path.is_file() and is_supported_song(path))]
 
     def dragEnterEvent(self, event):
         if self.accepts_drag(event):
             event.setDropAction(Qt.MoveAction)
             event.accept()
-        elif self.dropped_folders(event):
+        elif self.dropped_paths(event):
             event.setDropAction(Qt.CopyAction)
             event.accept()
         else:
@@ -167,7 +169,7 @@ class PlaylistMap(QWidget):
 
     def dragMoveEvent(self, event):
         internal = self.accepts_drag(event)
-        if not internal and not self.dropped_folders(event):
+        if not internal and not self.dropped_paths(event):
             event.ignore()
             return
         position = event.position().toPoint()
@@ -206,8 +208,11 @@ class PlaylistMap(QWidget):
             self.moveRequested.emit(self.drag_indices, insertion[0])
             event.setDropAction(Qt.MoveAction)
             event.accept()
-        elif insertion is not None and (folders := self.dropped_folders(event)):
-            self.foldersDropped.emit(folders, insertion[0])
+        elif insertion is not None and (paths := self.dropped_paths(event)):
+            if all(path.is_dir() for path in paths):
+                self.foldersDropped.emit(paths, insertion[0])
+            else:
+                self.pathsDropped.emit(paths, insertion[0])
             event.setDropAction(Qt.CopyAction)
             event.accept()
         else:
@@ -236,7 +241,8 @@ class PlaylistMap(QWidget):
         painter.fillRect(self.rect(), QColor("#101923"))
         if not self.entries or not self.geometry_plan:
             painter.setPen(QColor("#b2c2d2"))
-            painter.drawText(self.rect(), Qt.AlignCenter, "פתח Playlist כדי להציג את מפת השירים")
+            painter.drawText(self.rect(), Qt.AlignCenter,
+                             "Drop songs or folders here\nRight-click to add a song or category")
             return
         plan = self.geometry_plan
         for index, entry in enumerate(self.entries):
