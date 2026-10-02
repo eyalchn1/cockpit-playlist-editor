@@ -308,6 +308,7 @@ class MapArea(QScrollArea):
     def __init__(self):
         super().__init__()
         self.setLayoutDirection(Qt.LeftToRight)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QScrollArea.NoFrame)
@@ -345,6 +346,7 @@ class MapArea(QScrollArea):
 
     def set_column_direction(self, right_to_left):
         self.map.right_to_left = right_to_left
+        self.setAlignment((Qt.AlignRight if right_to_left else Qt.AlignLeft) | Qt.AlignTop)
         self.map.clear_drag_feedback()
         self.reflow()
         self.scroll_to_start()

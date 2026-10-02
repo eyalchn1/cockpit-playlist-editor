@@ -31,6 +31,14 @@ class VerticalLayoutTests(unittest.TestCase):
         for height in (0, 10, 28):
             self.assertEqual(calculate_layout(3, 500, height, 28, 190).rows, 1)
 
+    def test_preferred_width_does_not_depend_on_column_count_or_viewport(self):
+        for width in (180, 600, 3000):
+            for count, columns in ((0, 1), (3, 1), (35, 1), (70, 2), (85, 3), (350, 10)):
+                with self.subTest(width=width, count=count):
+                    plan = calculate_layout(count, width, 980, 28, 190)
+                    self.assertEqual((plan.rows, plan.columns, plan.column_width, plan.content_width),
+                                     (35, columns, 190, columns * 190))
+
 
 class ViewportFlowTests(unittest.TestCase):
     @classmethod
@@ -108,3 +116,40 @@ class ViewportFlowTests(unittest.TestCase):
             self.app.processEvents()
             self.assert_flow()
             self.assertEqual(self.area.map.geometry_plan.rows, rows)
+
+    def test_preferred_width_empty_space_direction_and_overflow(self):
+        view = self.area.map
+        preferred = view.geometry_plan.column_width
+        row_height = view.row_height
+        rows = view.geometry_plan.rows
+        for rtl in (False, True):
+            self.area.set_column_direction(rtl)
+            for columns in (1, 2, 3):
+                with self.subTest(rtl=rtl, columns=columns):
+                    entries = self.entries[:(columns - 1) * rows + 3]
+                    self.area.set_entries(entries)
+                    self.app.processEvents()
+                    plan = view.geometry_plan
+                    self.assertEqual((plan.rows, plan.columns, plan.column_width),
+                                     (rows, columns, preferred))
+                    self.assertEqual(view.row_height, row_height)
+                    self.assertEqual(view.width(), columns * preferred)
+                    self.assertLess(view.width(), self.area.viewport().width())
+                    self.assertEqual(self.area.horizontalScrollBar().maximum(), 0)
+                    origin = view.mapTo(self.area.viewport(), QPoint(0, 0))
+                    self.assertEqual(origin.x(), self.area.viewport().width() - view.width() if rtl else 0)
+                    first = QPoint(view.visual_column(0) * preferred + 10, row_height // 2)
+                    self.assertEqual(view.index_at(first), 0)
+                    blank_x = origin.x() - 1 if rtl else origin.x() + view.width()
+                    blank = view.mapFrom(self.area.viewport(), QPoint(blank_x, row_height // 2))
+                    self.assertIsNone(view.index_at(blank))
+            self.area.resize(preferred * 2 - 10, 650)
+            self.app.processEvents()
+            self.area.scroll_to_start()
+            plan = view.geometry_plan
+            self.assertEqual((plan.rows, plan.column_width), (rows, preferred))
+            bar = self.area.horizontalScrollBar()
+            self.assertGreater(bar.maximum(), 0)
+            self.assertEqual(bar.value(), bar.maximum() if rtl else 0)
+            self.area.resize(2000, 650)
+            self.app.processEvents()

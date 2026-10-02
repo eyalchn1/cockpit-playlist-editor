@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QStandardPaths
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QMessageBox, QMenu, QInputDialog
 from playlist import Playlist, SONG_FILE_FILTER
@@ -141,8 +141,7 @@ class MainWindow(QMainWindow):
 
     def open_dialog(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Open Cockpit Playlist",
-                    str(self.document.source.parent) if self.document and self.document.source else
-                    self.settings.value("files/playlistDirectory", "", type=str), "Playlist JSON (*.json)")
+                    str(self.playlist_dialog_directory()), "Playlist JSON (*.json)")
         if filename:
             self.load_playlist(filename)
 
@@ -174,6 +173,14 @@ class MainWindow(QMainWindow):
         self.settings.setValue("files/playlistDirectory", str(Path(filename).resolve().parent))
         self.settings.sync()
 
+    def playlist_dialog_directory(self):
+        remembered = self.settings.value("files/playlistDirectory", "", type=str)
+        if remembered:
+            directory = Path(remembered)
+            if directory.is_absolute() and directory.is_dir():
+                return directory
+        return Path(QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation))
+
     def save_to(self, filename, force_confirmation=False):
         if self.document is None:
             return False
@@ -202,8 +209,8 @@ class MainWindow(QMainWindow):
     def save_as_playlist(self):
         if self.document is None:
             return False
-        initial = str(self.document.source) if self.document.source else str(
-            Path(self.settings.value("files/playlistDirectory", "", type=str)) / "Untitled.json")
+        name = self.document.source.name if self.document.source else "Untitled.json"
+        initial = str(self.playlist_dialog_directory() / name)
         filename, _ = QFileDialog.getSaveFileName(self, "Save Playlist As", initial,
             "Playlist JSON (*.json)", options=QFileDialog.DontConfirmOverwrite)
         if not filename:

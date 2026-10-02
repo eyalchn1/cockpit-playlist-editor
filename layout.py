@@ -16,5 +16,5 @@ def calculate_layout(count, width, height, row_height, minimum_width, fixed_widt
         minimum_width = fixed_width
     rows = max(1, height // row_height)
     columns = max(1, ceil(count / rows))
-    column_width = fixed_width if fixed_width is not None else max(minimum_width, width // columns)
+    column_width = minimum_width
     return ColumnLayout(rows, columns, column_width, columns * column_width)
