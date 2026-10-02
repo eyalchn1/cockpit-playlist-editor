@@ -1,0 +1,164 @@
+import copy
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+from PySide6.QtCore import Qt, QMimeData, QUrl, QPoint, QPointF, QSettings
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+from playlist import Playlist
+import test_editing
+
+
+class FolderDropTests(test_editing.EditingWindowTests):
+    def setUp(self):
+        super().setUp()
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.window.settings = QSettings(str(self.root / "settings.ini"), QSettings.IniFormat)
+
+    def tearDown(self):
+        super().tearDown()
+        self.temp.cleanup()
+
+    def folder(self, name, files=()):
+        folder = self.root / name
+        folder.mkdir()
+        for filename in files:
+            (folder / filename).write_bytes(b"unchanged song")
+        return folder
+
+    def drop_folders(self, folders, position=None):
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(folder)) for folder in folders])
+        position = position if position is not None else (
+            self.position(0, 0.1) if self.map.entries else QPoint(50, 5))
+        actions = Qt.CopyAction | Qt.MoveAction
+        for event in (
+                QDragEnterEvent(position, actions, mime, Qt.LeftButton, Qt.NoModifier),
+                QDragMoveEvent(position, actions, mime, Qt.LeftButton, Qt.NoModifier),
+                QDropEvent(QPointF(position), actions, mime, Qt.LeftButton, Qt.NoModifier)):
+            QApplication.sendEvent(self.map, event)
+            self.assertTrue(event.isAccepted())
+            self.assertEqual(event.dropAction(), Qt.CopyAction)
+        self.assertIsNone(self.map.insertion)
+        self.assertFalse(self.map.scroll_timer.isActive())
+
+    def names(self):
+        return [entry.name for entry in self.map.entries]
+
+    def test_single_folder_natural_order_and_entry_compatibility(self):
+        folder = self.folder("Sixties", ["Song 10.MID", "song 2.wrk", "Song 1.mIdI"])
+        self.drop_folders([folder])
+        self.assertEqual(self.names()[:4], ["Sixties", "Song 1", "song 2", "Song 10"])
+        expected = Playlist({"entries": []}, None)
+        expected.insert_entry(0, category_name="Sixties")
+        for name in ["Song 1.mIdI", "song 2.wrk", "Song 10.MID"]:
+            expected.insert_entry(len(expected.data["entries"]), song_path=str(folder / name))
+        self.assertEqual(self.window.document.data["entries"][:4], expected.data["entries"])
+        for path in folder.iterdir():
+            self.assertEqual(path.read_bytes(), b"unchanged song")
+
+    def test_multiple_folders_at_middle_in_both_directions(self):
+        folders = [self.folder("Sixties", ["A.mid"]), self.folder("Seventies", ["B.wrk"]),
+                   self.folder("Beatles", ["C.midi"])]
+        for rtl in (False, True):
+            self.window.document = test_editing.fixture()
+            self.window.refresh_after_edit()
+            self.window.area.set_column_direction(rtl)
+            original = copy.deepcopy(self.window.document.data)
+            self.drop_folders(folders, self.position(3, 0.1))
+            self.assertEqual(self.names(), ["A", "B", "Festival", "Sixties", "A", "Seventies",
+                                            "B", "Beatles", "C", "C", "D", "E"])
+            self.assertEqual(self.window.document.data["entries"][:3], original["entries"][:3])
+            self.assertEqual(self.window.document.data["entries"][9:], original["entries"][3:])
+            self.assertEqual([e.number for e in self.map.entries if not e.category], list(range(1, 9)))
+            self.assertTrue(all(e.number is None for e in self.map.entries if e.category))
+
+    def test_empty_folder_still_creates_category(self):
+        self.drop_folders([self.folder("Empty")])
+        self.assertEqual(self.names()[0], "Empty")
+        self.assertTrue(self.map.entries[0].category)
+
+    def test_unsupported_files_are_skipped(self):
+        self.drop_folders([self.folder("Mixed", ["yes.mid", "yes2.WRK", "no.mp3", "no.txt"])])
+        self.assertEqual(self.names()[:4], ["Mixed", "yes2", "yes", "A"])
+
+    def test_subfolders_are_not_scanned(self):
+        folder = self.folder("Parent", ["direct.mid"])
+        subfolder = folder / "Child.mid"
+        subfolder.mkdir()
+        (subfolder / "nested.wrk").write_bytes(b"nested")
+        self.drop_folders([folder])
+        self.assertEqual(self.names()[:3], ["Parent", "direct", "A"])
+        self.assertEqual((subfolder / "nested.wrk").read_bytes(), b"nested")
+
+    def test_drop_into_empty_loaded_playlist(self):
+        self.window.document.data["entries"].clear()
+        self.window.refresh_after_edit()
+        self.drop_folders([self.folder("First", ["one.mid"]), self.folder("Second")])
+        self.assertEqual(self.names(), ["First", "one", "Second"])
+
+    def test_drop_without_document_and_save_reload(self):
+        self.window.document = None
+        self.window.area.set_entries([])
+        self.drop_folders([self.folder("New", ["one.mid"])])
+        self.assertIsNone(self.window.document.source)
+        self.assertTrue(self.window.save_action.isEnabled())
+        self.assertTrue(self.window.save_as_action.isEnabled())
+        self.assertEqual(self.names(), ["New", "one"])
+        expected = copy.deepcopy(self.window.document.data)
+        destination = self.root / "saved.json"
+        self.assertFalse(destination.exists())
+        with patch.object(QFileDialog, "getSaveFileName", return_value=("", "")):
+            self.assertFalse(self.window.save_playlist())
+        self.assertIsNone(self.window.document.source)
+        self.assertEqual(self.window.document.data, expected)
+        with patch.object(QFileDialog, "getSaveFileName", return_value=(str(destination), "")):
+            self.assertTrue(self.window.save_playlist())
+        self.assertEqual(Playlist.load(destination).data, expected)
+        self.assertTrue(self.window.load_playlist(destination))
+        self.assertEqual(self.names(), ["New", "one"])
+
+    def test_existing_source_not_saved_and_imported_songs_can_move(self):
+        source = self.root / "original.json"
+        self.window.document.save(source)
+        before = source.read_bytes()
+        self.drop_folders([self.folder("New", ["one.mid", "two.mid"])])
+        self.assertEqual(source.read_bytes(), before)
+        self.click(1)
+        self.click(2, Qt.ControlModifier)
+        self.drag_with_qt_events(1, self.position(len(self.map.entries) - 1, 0.9))
+        self.assertEqual(self.names()[-2:], ["one", "two"])
+        self.window.change_font_size(1)
+        self.window.change_column_width(24)
+        self.assertEqual(source.read_bytes(), before)
+        destination = self.root / "edited.json"
+        self.assertTrue(self.window.save_to(destination))
+        self.assertTrue(self.window.load_playlist(destination))
+        self.assertEqual(self.names()[-2:], ["one", "two"])
+
+    def test_unreadable_folder_import_is_atomic(self):
+        original = copy.deepcopy(self.window.document.data)
+        folder = self.folder("Readable", ["one.mid"])
+        missing = self.root / "Missing"
+        with patch.object(QMessageBox, "warning") as warning:
+            self.window.import_folders([folder, missing], 2)
+        warning.assert_called_once()
+        self.assertEqual(self.window.document.data, original)
+        with patch.object(Path, "iterdir", side_effect=PermissionError("Access denied")), \
+                patch.object(QMessageBox, "warning") as warning:
+            self.window.import_folders([folder], 2)
+        warning.assert_called_once()
+        self.assertEqual(self.window.document.data, original)
+
+    def test_file_and_remote_url_drags_are_rejected(self):
+        folder = self.folder("Folder", ["one.mid"])
+        for urls in ([QUrl.fromLocalFile(str(folder / "one.mid"))],
+                     [QUrl("https://example.com/folder")]):
+            mime = QMimeData()
+            mime.setUrls(urls)
+            event = QDragEnterEvent(QPoint(50, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+            QApplication.sendEvent(self.map, event)
+            self.assertFalse(event.isAccepted())
