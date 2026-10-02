@@ -30,6 +30,7 @@ class DisplayEntry:
     name: str
     number: int | None
     category: bool
+    depth: int = 0
 
 
 class Playlist:
@@ -108,7 +109,9 @@ class Playlist:
             songs = sorted((path for path in children
                             if path.is_file() and is_supported_song(path)),
                            key=song_name_key)
-            staged.insert_entry(len(staged.data["entries"]), category_name=folder.name)
+            category = staged.insert_entry(len(staged.data["entries"]), category_name=folder.name)
+            if include_subfolders and ancestors:
+                category["hierarchy_depth"] = len(ancestors)
             for song in songs:
                 staged.insert_entry(len(staged.data["entries"]), song_path=str(song))
             if include_subfolders:
@@ -127,7 +130,10 @@ class Playlist:
                 number += 1
                 name = ntpath.splitext(ntpath.basename(entry.get("path", "")))[0]
                 name = name or entry.get("title") or "שיר ללא שם"
-            result.append(DisplayEntry(index, name, None if category else number, category))
+            depth = entry.get("hierarchy_depth", 0) if category else 0
+            if type(depth) is not int or depth < 0:
+                depth = 0
+            result.append(DisplayEntry(index, name, None if category else number, category, depth))
         return result
 
     def move_songs(self, indices, boundary):

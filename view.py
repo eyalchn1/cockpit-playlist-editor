@@ -236,6 +236,14 @@ class PlaylistMap(QWidget):
         self.setFixedSize(QSize(self.geometry_plan.content_width, max(1, height)))
         self.update()
 
+    def category_rect(self, rect, depth):
+        width = round(rect.width() * (1.0, 0.80, 0.60)[min(2, max(0, depth))])
+        result = QRect(rect)
+        result.setWidth(width)
+        if self.right_to_left:
+            result.moveRight(rect.right())
+        return result
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#101923"))
@@ -252,6 +260,8 @@ class PlaylistMap(QWidget):
                          plan.column_width - 8, self.row_height - 4)
             if not rect.intersects(event.rect()):
                 continue
+            if entry.category:
+                rect = self.category_rect(rect, entry.depth)
             painter.fillRect(rect, QColor("#254d59" if entry.category else
                                          ("#1b2836" if row % 2 == 0 else "#16222f")))
             if index in self.selected:
@@ -271,7 +281,8 @@ class PlaylistMap(QWidget):
             painter.setPen(QColor("#a9efdf" if entry.category else "#e6edf5"))
             label = painter.fontMetrics().elidedText(entry.name, Qt.ElideLeft, text_rect.width())
             alignment = Qt.AlignCenter if entry.category else Qt.AlignRight | Qt.AlignVCenter
-            painter.drawText(text_rect, alignment, "\u200f" + label)
+            prefix = "\u200f" if not entry.category or not entry.depth or self.right_to_left else "\u200e"
+            painter.drawText(text_rect, alignment, prefix + label)
         if self.insertion is not None:
             _, column, row = self.insertion
             x = column * plan.column_width + 4
