@@ -313,6 +313,18 @@ class MapArea(QScrollArea):
         self.setFrameShape(QScrollArea.NoFrame)
         self.map = PlaylistMap()
         self.setWidget(self.map)
+        self.map.installEventFilter(self)
+
+    def viewportEvent(self, event):
+        result = super().viewportEvent(event)
+        if event.type() == QEvent.Resize and hasattr(self, "map"):
+            self.reflow()
+        return result
+
+    def eventFilter(self, watched, event):
+        if watched is self.map and event.type() == QEvent.FontChange:
+            self.reflow()
+        return super().eventFilter(watched, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

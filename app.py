@@ -14,8 +14,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.document = None
         self.overwrite_approved = set()
+        settings_directory = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+                              else Path(__file__).resolve().parent)
         self.settings = settings if settings is not None else QSettings(
-            str(Path(__file__).resolve().parent / ".user-settings.ini"), QSettings.IniFormat)
+            str(settings_directory / ".user-settings.ini"), QSettings.IniFormat)
         self.setWindowTitle("Cockpit Playlist Editor — Prototype")
         self.resize(1500, 900)
         self.setMinimumSize(500, 320)

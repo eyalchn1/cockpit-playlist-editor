@@ -149,6 +149,7 @@ class SaveAndFontTests(unittest.TestCase):
             plan = view.geometry_plan
             plans.append(plan)
             capacities.append(self.window.area.viewport().height() // view.row_height)
+            self.assertEqual(plan.rows, max(1, capacities[-1]))
             self.assertGreaterEqual(plan.columns * plan.rows, 179)
             self.assertEqual(view.selected, {1, 3})
             self.assertEqual(view.anchor, 1)
@@ -156,7 +157,8 @@ class SaveAndFontTests(unittest.TestCase):
             self.assertEqual(view.font().pointSize(), size)
             self.window.grab().save(f"test-output/font-{size}.png")
         self.assertGreater(view.row_height, initial_height)
-        self.assertLess(plans[0].column_width, initial.column_width)
+        self.assertGreater(plans[0].rows, initial.rows)
+        self.assertLess(plans[0].columns, initial.columns)
         self.assertGreater(plans[-1].column_width, plans[0].column_width)
         self.assertLess(capacities[-1], capacities[0])
         self.window.change_font_size(reset=True)

@@ -39,7 +39,8 @@ class PrototypeTests(unittest.TestCase):
             self.assertLessEqual(plan.rows * 28, height)
             self.assertGreaterEqual(plan.column_width, 190)
         plan = calculate_layout(210, 1900, 900, 28, 190)
-        self.assertEqual(plan.columns, 10)
+        self.assertEqual(plan.rows, 32)
+        self.assertEqual(plan.columns, 7)
         self.assertLessEqual(plan.content_width, 1900)
 
     def test_bom_empty_playlist(self):
